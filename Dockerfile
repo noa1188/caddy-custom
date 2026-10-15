@@ -1,5 +1,5 @@
 # Caddy custom build with xcaddy
-ARG CADDY_VERSION=2.11.6
+ARG CADDY_VERSION=2.11.7
 
 FROM caddy:${CADDY_VERSION}-builder AS builder
 ARG CADDY_VERSION
