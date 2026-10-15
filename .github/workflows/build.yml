@@ -62,10 +62,13 @@ jobs:
         run: |
           V=${{ steps.version.outputs.caddy_version }}
           U=${{ secrets.DOCKERHUB_USERNAME }}
+          SRC=https://github.com/noa1188/caddy-custom
           docker buildx build --platform linux/amd64,linux/arm64 \
             --build-arg CADDY_VERSION=$V \
             -t $U/caddy-custom:$V \
             -t $U/caddy-custom:latest \
+            --label org.opencontainers.image.source=$SRC \
+            --label org.opencontainers.image.version=$V \
             --push .
 
       - name: Create GitHub Release
