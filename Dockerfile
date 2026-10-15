@@ -19,4 +19,5 @@ RUN xcaddy build \
 
 FROM caddy:${CADDY_VERSION}-alpine
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+RUN caddy version && caddy list-modules
 ENTRYPOINT ["caddy"]
