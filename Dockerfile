@@ -22,3 +22,6 @@ COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 RUN caddy version && caddy list-modules
 ENTRYPOINT ["caddy"]
 CMD ["run"]
+LABEL org.opencontainers.image.description="Custom Caddy build with xcaddy plugins"
+LABEL org.opencontainers.image.source="https://github.com/noa1188/caddy-custom"
+LABEL org.opencontainers.image.version="${CADDY_VERSION}"
