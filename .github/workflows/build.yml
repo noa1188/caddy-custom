@@ -79,6 +79,7 @@ jobs:
             -t ghcr.io/${{ github.repository_owner }}/caddy-custom:latest \
             --label org.opencontainers.image.source=$SRC \
             --label org.opencontainers.image.version=$V \
+            --label org.opencontainers.image.description="Caddy with plugins" \
             --push .
 
       - name: Create GitHub Release
