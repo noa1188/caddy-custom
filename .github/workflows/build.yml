@@ -1,0 +1,74 @@
+name: Build and Push
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      caddy_version:
+        description: 'Caddy version'
+        required: false
+        default: ''
+      plugin_cloudflare:
+        description: 'cloudflare plugin'
+        required: false
+        default: ''
+      plugin_desec:
+        description: 'desec plugin'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract version from Dockerfile
+        id: version
+        run: |
+          INPUT=${{ github.event.inputs.caddy_version }}
+          if [ -n "$INPUT" ]; then
+            V=$INPUT
+          else
+            V=$(grep 'ARG CADDY_VERSION=' Dockerfile | cut -d= -f2 | tr -d '\r')
+          fi
+          echo "caddy_version=$V" >> $GITHUB_OUTPUT
+          echo "Caddy version: $V"
+
+      - name: Print release version
+        run: |
+          echo "Release version: ${{ steps.version.outputs.caddy_version }}"
+
+      - name: Build and push multi-arch
+        run: |
+          V=${{ steps.version.outputs.caddy_version }}
+          U=${{ secrets.DOCKERHUB_USERNAME }}
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            --build-arg CADDY_VERSION=$V \
+            -t $U/caddy-custom:$V \
+            -t $U/caddy-custom:latest \
+            --push .
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.caddy_version }}
+          name: Caddy ${{ steps.version.outputs.caddy_version }}
+          generate_release_notes: true
