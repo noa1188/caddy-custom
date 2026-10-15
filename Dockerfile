@@ -19,13 +19,6 @@ RUN xcaddy build \
 
 FROM caddy:${CADDY_VERSION}-alpine
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
-# Basic validation during image build:
-# - caddy version: confirms the binary exists and runs
-# - caddy list-modules: confirms plugins were built into the binary
-RUN /usr/bin/caddy version \
- && /usr/bin/caddy list-modules
-# Default container behavior:
-# - ENTRYPOINT keeps caddy as the main executable
-# - CMD can be overridden by docker run / compose / kubernetes
-ENTRYPOINT ["/usr/bin/caddy"]
-CMD ["version"]
+RUN caddy version && caddy list-modules
+ENTRYPOINT ["caddy"]
+CMD ["run"]
