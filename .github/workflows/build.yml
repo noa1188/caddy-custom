@@ -3,23 +3,10 @@ name: Build and Push
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
-  workflow_run:
-    workflows: ["Check Caddy Version"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       caddy_version:
         description: 'Caddy version'
-        required: false
-        default: ''
-      plugin_cloudflare:
-        description: 'cloudflare plugin'
-        required: false
-        default: ''
-      plugin_desec:
-        description: 'desec plugin'
         required: false
         default: ''
 
@@ -83,7 +70,7 @@ jobs:
             --push .
 
       - name: Create GitHub Release
-        if: github.ref == 'refs/heads/main'
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.caddy_version }}
