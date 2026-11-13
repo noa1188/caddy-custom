@@ -26,13 +26,15 @@ jobs:
         id: vercheck
         run: |
           CUR=$(grep '^ARG CADDY_VERSION=' Dockerfile | cut -d= -f2 | tr -d '\r')
-          PREV=$(git show HEAD~1:Dockerfile 2>/dev/null | grep '^ARG CADDY_VERSION=' | cut -d= -f2 | tr -d '\r' || true)
-          if [ -n "$PREV" ] && [ "$CUR" != "$PREV" ]; then
+          # Check if the CADDY_VERSION line changed in the current push
+          DIFF=$(git diff --unified=0 HEAD^ HEAD -- Dockerfile 2>/dev/null \
+            | grep 'ARG CADDY_VERSION=')
+          if [ -n "$DIFF" ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
-          echo "Caddy version: $CUR (previous: ${PREV:-<none>})"
+          echo "Caddy version: $CUR"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
