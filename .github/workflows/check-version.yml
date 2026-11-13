@@ -15,29 +15,36 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get current version
-        id: current
-        run: |
-          V=$(grep 'ARG CADDY_VERSION=' Dockerfile | cut -d= -f2)
-          VERSION=${V//$'\r'/}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Get latest release
-        id: latest
+      - name: Get official caddy latest
+        id: caddy_latest
         run: |
           URL=https://api.github.com/repos/caddyserver/caddy/releases/latest
-          LATEST=$(curl -s $URL | jq -r .tag_name)
-          LATEST=${LATEST#v}
-          echo "version=$LATEST" >> $GITHUB_OUTPUT
+          LATEST=$(curl -s "$URL" | jq -r .tag_name)
+          # Remove 'v' prefix if exists
+          VERSION=${LATEST#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Update Dockerfile if changed
-        if: steps.current.outputs.version != steps.latest.outputs.version
+      - name: Get our last release
+        id: our_latest
         run: |
-          VER=${{ steps.latest.outputs.version }}
+          REPO_URL="https://api.github.com/repos/${{ github.repository }}/releases/latest"
+          LAST=$(curl -s "$REPO_URL" | jq -r .tag_name || echo "")
+          if [ -n "$LAST" ]; then
+            # Extract version number from tag like "Caddy 2.8.4" -> "2.8.4"
+            VERSION=$(echo "$LAST" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "version=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update Dockerfile if new caddy version exists
+        if: steps.caddy_latest.outputs.version != steps.our_latest.outputs.version
+        run: |
+          VER=${{ steps.caddy_latest.outputs.version }}
           sed -i "s/^ARG CADDY_VERSION=.*/ARG CADDY_VERSION=$VER/" Dockerfile
           echo "Release version: $VER"
           git config user.name github-actions
           git config user.email github-actions@github.com
           git add Dockerfile
-          git commit -m "Bump Caddy to ${{ steps.latest.outputs.version }}"
+          git commit -m "Bump Caddy to $VER"
           git push
