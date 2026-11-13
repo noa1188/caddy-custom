@@ -26,10 +26,9 @@ jobs:
         id: vercheck
         run: |
           CUR=$(grep '^ARG CADDY_VERSION=' Dockerfile | cut -d= -f2 | tr -d '\r')
-          # Check if the CADDY_VERSION line changed in the current push
-          DIFF=$(git diff --unified=0 HEAD^ HEAD -- Dockerfile 2>/dev/null \
-            | grep 'ARG CADDY_VERSION=')
-          if [ -n "$DIFF" ]; then
+          # Check if the CADDY_VERSION line changed in this specific push
+          if git diff --unified=0 HEAD^ HEAD -- Dockerfile 2>/dev/null \
+            | grep -q 'ARG CADDY_VERSION='; then
             echo "changed=true" >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
