@@ -27,28 +27,30 @@ jobs:
       - name: Detect Version and Decision
         id: vercheck
         run: |
-          # Get current version from Dockerfile
+          # 1. 获取当前文件中的版本号
           CUR=$(grep '^ARG CADDY_VERSION=' Dockerfile \
             | cut -d= -f2 | tr -d '\r')
           
-          # Get our last release version
+          # 2. 获取我们上一次发布的 Release 版本号
           BASE_URL="https://api.github.com"
           REPO_PATH="/repos/${{ github.repository }}/releases/latest"
           REPO_URL="$BASE_URL$REPO_PATH"
           LAST_TAG=$(curl -s "$REPO_URL" | jq -r .tag_name || echo "")
           
+          LAST_VER=""
           if [ -n "$LAST_TAG" ]; then
-            # Extract version number like "2.8.4"
+            # 提取版本号如 "2.8.4"
             LAST_VER=$(echo "$LAST_TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-            echo "last_release=$LAST_VER" >> $GITHUB_OUTPUT
-          else
-            echo "last_release=" >> $GITHUB_OUTPUT
           fi
+          
+          # 将结果写入输出供后续步骤使用
+          echo "last_release=$LAST_VER" >> $GITHUB_OUTPUT
 
-          # Trigger build if current file version != last released version
+          # 3. 判断是否需要构建
           IS_NEW=false
+          # 如果是手动触发，或者当前版本与上次发布不符，则标记为 true
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || \
-             [ "$CUR" != "$(echo ${steps.vercheck.outputs.last_release})" ]; then
+             [ "$CUR" != "$LAST_VER" ]; then
             IS_NEW=true
           fi
           
@@ -57,8 +59,9 @@ jobs:
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
+          
           echo "Current: $CUR"
-          echo "Last Release: ${steps.vercheck.outputs.last_release}"
+          echo "Last Release: $LAST_VER"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
