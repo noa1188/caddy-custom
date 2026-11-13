@@ -25,15 +25,33 @@ jobs:
       - name: Detect version change
         id: vercheck
         run: |
-          CUR=$(grep '^ARG CADDY_VERSION=' Dockerfile | cut -d= -f2 | tr -d '\r')
-          # Check if the CADDY_VERSION line changed in this specific push
-          if git diff --unified=0 HEAD^ HEAD -- Dockerfile 2>/dev/null \
-            | grep -q 'ARG CADDY_VERSION='; then
+          # Get current version from Dockerfile
+          CUR=$(grep '^ARG CADDY_VERSION=' Dockerfile \
+            | cut -d= -f2 | tr -d '\r')
+          
+          # Get our last release version
+          BASE_URL="https://api.github.com"
+          REPO_PATH="/repos/${{ github.repository }}/releases/latest"
+          REPO_URL="$BASE_URL$REPO_PATH"
+          LAST_TAG=$(curl -s "$REPO_URL" | jq -r .tag_name || echo "")
+          
+          if [ -n "$LAST_TAG" ]; then
+            # Extract version number like "2.8.4"
+            LAST_VER=$(echo "$LAST_TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+            echo "last_release=$LAST_VER" >> $GITHUB_OUTPUT
+          else
+            echo "last_release=" >> $GITHUB_OUTPUT
+          fi
+
+          # Trigger build if current file version != last released version
+          LAST_VAL=$(echo ${steps.vercheck.outputs.last_release})
+          if [ "$CUR" != "$LAST_VAL" ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
-          echo "Caddy version: $CUR"
+          echo "Current: $CUR"
+          echo "Last Release: $LAST_VAL"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -60,7 +78,8 @@ jobs:
           if [ -n "$INPUT" ]; then
             V=$INPUT
           else
-            V=$(grep 'ARG CADDY_VERSION=' Dockerfile | cut -d= -f2 | tr -d '\r')
+            V=$(grep '^ARG CADDY_VERSION=' Dockerfile \
+              | cut -d= -f2 | tr -d '\r')
           fi
           echo "caddy_version=$V" >> $GITHUB_OUTPUT
           echo "Caddy version: $V"
