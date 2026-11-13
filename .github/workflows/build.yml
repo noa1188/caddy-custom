@@ -5,33 +5,74 @@ on:
     branches: [main]
     paths:
       - 'Dockerfile'
-  workflow_dispatch:
-    inputs:
-      caddy_version:
-        description: 'Caddy version'
-        required: false
-        default: ''
+  schedule:
+    - cron: '5 1 */3 * *' # 每 3 小时运行一次自动同步
+  workflow_dispatch:       # 支持手动点击按钮触发构建
+
+permissions:
+  contents: write
+  packages: write
 
 jobs:
-  build:
+  # --- 任务 A: 自动同步 (仅在定时任务运行时执行) ---
+  sync_version:
+    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Detect Version and Decision
+      - name: Check and Update Version
+        run: |
+          BASE_URL="https://api.github.com"
+          REPO_PATH="/repos/caddyserver/caddy/releases/latest"
+          REPO_URL="$BASE_URL$REPO_PATH"
+          
+          # 获取官方最新版本号
+          LAST_TAG=$(curl -s "$REPO_URL" | jq -r .tag_name || echo "")
+          OFFICIAL_VER=${LAST_TAG#v}
+          echo "Official version: $OFFICIAL_VER"
+
+          # 获取当前文件中的版本号
+          CURRENT_VER=$(grep '^ARG CADDY_VERSION=' Dockerfile | cut -d= -f2 | tr -d '\r')
+          echo "Current version in Dockerfile: $CURRENT_VER"
+
+          # 如果版本不一致，则更新并推送
+          if [ "$OFFICIAL_VER" != "$CURRENT_VER" ] && [ -n "$OFFICIAL_VER" ]; then
+            echo "New version detected! Updating Dockerfile..."
+            sed -i "s/^ARG CADDY_VERSION=.*/ARG CADDY_VERSION=$OFFICIAL_VER/" Dockerfile
+            
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add Dockerfile
+            git commit -m "chore: bump caddy to $OFFICIAL_VER [skip ci]"
+            # 推送到 main 分支，这将触发下方的 build 任务
+            git push origin HEAD:main
+          else
+            echo "No new version found. Skipping update."
+          fi
+
+  # --- 任务 B: 构建镜像 (当有推送或手动触发时执行) ---
+  build:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect Version Change
         id: vercheck
         run: |
-          # 1. 获取当前文件中的版本号
+          # 获取当前文件中的版本号
           CUR=$(grep '^ARG CADDY_VERSION=' Dockerfile \
             | cut -d= -f2 | tr -d '\r')
           
-          # 2. 获取我们上一次发布的 Release 版本号
+          # 获取我们上一次发布的 Release 版本号
           BASE_URL="https://api.github.com"
           REPO_PATH="/repos/${{ github.repository }}/releases/latest"
           REPO_URL="$BASE_URL$REPO_PATH"
@@ -39,16 +80,15 @@ jobs:
           
           LAST_VER=""
           if [ -n "$LAST_TAG" ]; then
-            # 提取版本号如 "2.8.4"
             LAST_VER=$(echo "$LAST_TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
           fi
           
-          # 将结果写入输出供后续步骤使用
+          # 输出给后续步骤使用
           echo "last_release=$LAST_VER" >> $GITHUB_OUTPUT
 
-          # 3. 判断是否需要构建
-          IS_NEW=false
+          # 判断逻辑：
           # 如果是手动触发，或者当前版本与上次发布不符，则标记为 true
+          IS_NEW=false
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || \
              [ "$CUR" != "$LAST_VER" ]; then
             IS_NEW=true
@@ -59,24 +99,17 @@ jobs:
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
-          
-          echo "Current: $CUR"
-          echo "Last Release: $LAST_VER"
+          echo "Current: $CUR, Last Release: $LAST_VER"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to Docker Hub
+      - name: Login to Registries
         if: steps.vercheck.outputs.changed == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Login to GHCR
-        if: steps.vercheck.outputs.changed == 'true'
-        uses: docker/login-action@v3
-        with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
