@@ -1,21 +1,21 @@
 name: Caddy Auto Sync & Build
 
 on:
+  schedule:
+    - cron: '5 1 */3 * *'
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - 'Dockerfile'
-  schedule:
-    - cron: '5 1 */3 * *' # 每 3 小时运行一次自动同步
-  workflow_dispatch:       # 支持手动点击按钮触发构建
+      - Dockerfile
 
 permissions:
   contents: write
   packages: write
 
 jobs:
-  sync_version:
-    if: github.event_name == 'schedule'
+  sync:
+    if: ${{ github.event_name != 'push' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -24,38 +24,34 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check and Update Version
+      - name: Check official version
+        id: check
         run: |
-          BASE_URL="https://api.github.com"
-          REPO_PATH="/repos/caddyserver/caddy/releases/latest"
-          REPO_URL="$BASE_URL$REPO_PATH"
-          
-          # 获取官方最新版本号
-          LAST_TAG=$(curl -s "$REPO_URL" | jq -r .tag_name || echo "")
-          OFFICIAL_VER=${LAST_TAG#v}
-          echo "Official version: $OFFICIAL_VER"
-
-          # 获取当前文件中的版本号
-          CURRENT_VER=$(grep '^ARG CADDY_VERSION=' Dockerfile | cut -d= -f2 | tr -d '\r')
-          echo "Current version in Dockerfile: $CURRENT_VER"
-
-          # 如果版本不一致，则更新并推送
-          if [ "$OFFICIAL_VER" != "$CURRENT_VER" ] && [ -n "$OFFICIAL_VER" ]; then
-            echo "New version detected! Updating Dockerfile..."
-            sed -i "s/^ARG CADDY_VERSION=.*/ARG CADDY_VERSION=$OFFICIAL_VER/" Dockerfile
-            
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add Dockerfile
-            git commit -m "chore: bump caddy to $OFFICIAL_VER [skip ci]"
-            # 推送到 main 分支
-            git push origin HEAD:main
+          URL=https://api.github.com/repos/caddyserver/caddy/releases/latest
+          TAG=$(curl -s $URL | jq -r .tag_name)
+          OFFICIAL=${TAG#v}
+          CUR=$(grep '^ARG CADDY_VERSION=' Dockerfile | cut -d= -f2)
+          echo "official=$OFFICIAL" >> $GITHUB_OUTPUT
+          echo "current=$CUR" >> $GITHUB_OUTPUT
+          if [ "$CUR" != "$OFFICIAL" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
           else
-            echo "No new version found. Skipping update."
+            echo "needs_update=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Update Dockerfile
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          VER=${{ steps.check.outputs.official }}
+          sed -i "s/^ARG CADDY_VERSION=.*/ARG CADDY_VERSION=$VER/" Dockerfile
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Dockerfile
+          git commit -m "chore: bump caddy"
+          git push
+
   build:
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -63,58 +59,31 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect Version and Decision
-        id: vercheck
+      - name: Get version
+        id: ver
         run: |
-          # 获取当前版本号
-          CUR=$(grep '^ARG CADDY_VERSION=' Dockerfile | cut -d= -f2 | tr -d '\r')
-          
-          # 获取上个 Release 版本号
-          BASE_URL="https://api.github.com"
-          REPO_PATH="/repos/${{ github.repository }}/releases/latest"
-          REPO_URL="$BASE_URL$REPO_PATH"
-          LAST_TAG=$(curl -s "$REPO_URL" | jq -r .tag_name || echo "")
-          
-          LAST_VER=""
-          if [ -n "$LAST_TAG" ]; then
-            LAST_VER=$(echo "$LAST_TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-          fi
-
-          # --- 核心修复：使用纯 Bash 变量进行逻辑判断 ---
-          IS_NEW=false
-          # 如果是手动触发，或者当前文件版本与上次发布记录不符，则标记为 true
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || \
-             [ "$CUR" != "$LAST_VER" ]; then
-            IS_NEW=true
-          fi
-          
-          if [ "$IS_NEW" = true ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "changed=false" >> $GITHUB_OUTPUT
-          fi
-          
-          echo "Current: $CUR"
-          echo "Last Release: $LAST_VER"
+          V=$(grep '^ARG CADDY_VERSION=' Dockerfile | cut -d= -f2 | tr -d '\r')
+          echo "version=$V" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to Registries
-        if: steps.vercheck.outputs.changed == 'true'
+      - name: Login Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login GHCR
+        uses: docker/login-action@v3
+        with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push
-        if: steps.vercheck.outputs.changed == 'true'
         run: |
-          # 重新提取最新的版本号确保准确性
-          V=$(grep '^ARG CADDY_VERSION=' Dockerfile | cut -d= -f2 | tr -d '\r')
+          V=${{ steps.ver.outputs.version }}
           U=${{ secrets.DOCKERHUB_USERNAME }}
           SRC=https://github.com/noa1188/caddy-custom
           docker buildx build --platform linux/amd64,linux/arm64 \
@@ -125,14 +94,11 @@ jobs:
             -t ghcr.io/${{ github.repository_owner }}/caddy-custom:latest \
             --label org.opencontainers.image.source=$SRC \
             --label org.opencontainers.image.version=$V \
-            --label org.opencontainers.image.description="Caddy with plugins" \
             --push .
 
-      - name: Create GitHub Release
-        if: steps.vercheck.outputs.changed == 'true'
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          # 这里使用上一步提取出的版本号作为 Tag 名
-          tag_name: ${{ steps.vercheck.outputs.last_release }}
-          name: Caddy ${{ steps.vercheck.outputs.last_release }}
+          tag_name: ${{ steps.ver.outputs.version }}
+          name: Caddy ${{ steps.ver.outputs.version }}
           generate_release_notes: true
