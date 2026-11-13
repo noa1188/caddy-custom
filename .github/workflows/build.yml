@@ -14,7 +14,6 @@ permissions:
   packages: write
 
 jobs:
-  # --- 任务 A: 自动同步 (仅在定时任务运行时执行) ---
   sync_version:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
@@ -49,13 +48,12 @@ jobs:
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add Dockerfile
             git commit -m "chore: bump caddy to $OFFICIAL_VER [skip ci]"
-            # 推送到 main 分支，这将触发下方的 build 任务
+            # 推送到 main 分支
             git push origin HEAD:main
           else
             echo "No new version found. Skipping update."
           fi
 
-  # --- 任务 B: 构建镜像 (当有推送或手动触发时执行) ---
   build:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -65,14 +63,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect Version Change
+      - name: Detect Version and Decision
         id: vercheck
         run: |
-          # 获取当前文件中的版本号
-          CUR=$(grep '^ARG CADDY_VERSION=' Dockerfile \
-            | cut -d= -f2 | tr -d '\r')
+          # 获取当前版本号
+          CUR=$(grep '^ARG CADDY_VERSION=' Dockerfile | cut -d= -f2 | tr -d '\r')
           
-          # 获取我们上一次发布的 Release 版本号
+          # 获取上个 Release 版本号
           BASE_URL="https://api.github.com"
           REPO_PATH="/repos/${{ github.repository }}/releases/latest"
           REPO_URL="$BASE_URL$REPO_PATH"
@@ -82,13 +79,10 @@ jobs:
           if [ -n "$LAST_TAG" ]; then
             LAST_VER=$(echo "$LAST_TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
           fi
-          
-          # 输出给后续步骤使用
-          echo "last_release=$LAST_VER" >> $GITHUB_OUTPUT
 
-          # 判断逻辑：
-          # 如果是手动触发，或者当前版本与上次发布不符，则标记为 true
+          # --- 核心修复：使用纯 Bash 变量进行逻辑判断 ---
           IS_NEW=false
+          # 如果是手动触发，或者当前文件版本与上次发布记录不符，则标记为 true
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || \
              [ "$CUR" != "$LAST_VER" ]; then
             IS_NEW=true
@@ -99,7 +93,9 @@ jobs:
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
-          echo "Current: $CUR, Last Release: $LAST_VER"
+          
+          echo "Current: $CUR"
+          echo "Last Release: $LAST_VER"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -117,9 +113,8 @@ jobs:
       - name: Build and Push
         if: steps.vercheck.outputs.changed == 'true'
         run: |
-          V=$(grep '^ARG CADDY_VERSION=' Dockerfile \
-            | cut -d= -f2 | tr -d '\r')
-          
+          # 重新提取最新的版本号确保准确性
+          V=$(grep '^ARG CADDY_VERSION=' Dockerfile | cut -d= -f2 | tr -d '\r')
           U=${{ secrets.DOCKERHUB_USERNAME }}
           SRC=https://github.com/noa1188/caddy-custom
           docker buildx build --platform linux/amd64,linux/arm64 \
@@ -137,6 +132,7 @@ jobs:
         if: steps.vercheck.outputs.changed == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          # 这里使用上一步提取出的版本号作为 Tag 名
           tag_name: ${{ steps.vercheck.outputs.last_release }}
           name: Caddy ${{ steps.vercheck.outputs.last_release }}
           generate_release_notes: true
