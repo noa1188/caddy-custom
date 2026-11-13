@@ -1,8 +1,10 @@
-name: Build and Push
+name: Caddy Auto Sync & Build
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'Dockerfile'
   workflow_dispatch:
     inputs:
       caddy_version:
@@ -22,7 +24,7 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Detect version change
+      - name: Detect Version and Decision
         id: vercheck
         run: |
           # Get current version from Dockerfile
@@ -35,22 +37,28 @@ jobs:
           REPO_URL="$BASE_URL$REPO_PATH"
           LAST_TAG=$(curl -s "$REPO_URL" | jq -r .tag_name || echo "")
           
-          LAST_VER=""
           if [ -n "$LAST_TAG" ]; then
             # Extract version number like "2.8.4"
             LAST_VER=$(echo "$LAST_TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+            echo "last_release=$LAST_VER" >> $GITHUB_OUTPUT
+          else
+            echo "last_release=" >> $GITHUB_OUTPUT
           fi
-          
-          echo "last_release=$LAST_VER" >> $GITHUB_OUTPUT
 
           # Trigger build if current file version != last released version
-          if [ "$CUR" != "$LAST_VER" ]; then
+          IS_NEW=false
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] || \
+             [ "$CUR" != "$(echo ${steps.vercheck.outputs.last_release})" ]; then
+            IS_NEW=true
+          fi
+          
+          if [ "$IS_NEW" = true ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
           else
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
           echo "Current: $CUR"
-          echo "Last Release: $LAST_VER"
+          echo "Last Release: ${steps.vercheck.outputs.last_release}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -70,27 +78,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract version from Dockerfile
-        id: version
-        run: |
-          INPUT=${{ github.event.inputs.caddy_version }}
-          if [ -n "$INPUT" ]; then
-            V=$INPUT
-          else
-            V=$(grep '^ARG CADDY_VERSION=' Dockerfile \
-              | cut -d= -f2 | tr -d '\r')
-          fi
-          echo "caddy_version=$V" >> $GITHUB_OUTPUT
-          echo "Caddy version: $V"
-
-      - name: Print release version
-        run: |
-          echo "Release version: ${{ steps.version.outputs.caddy_version }}"
-
-      - name: Build and push multi-arch
+      - name: Build and Push
         if: steps.vercheck.outputs.changed == 'true'
         run: |
-          V=${{ steps.version.outputs.caddy_version }}
+          V=$(grep '^ARG CADDY_VERSION=' Dockerfile \
+            | cut -d= -f2 | tr -d '\r')
+          
           U=${{ secrets.DOCKERHUB_USERNAME }}
           SRC=https://github.com/noa1188/caddy-custom
           docker buildx build --platform linux/amd64,linux/arm64 \
@@ -108,6 +101,6 @@ jobs:
         if: steps.vercheck.outputs.changed == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.caddy_version }}
-          name: Caddy ${{ steps.version.outputs.caddy_version }}
+          tag_name: ${{ steps.vercheck.outputs.last_release }}
+          name: Caddy ${{ steps.vercheck.outputs.last_release }}
           generate_release_notes: true
